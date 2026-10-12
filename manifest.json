@@ -1,0 +1,9 @@
+{
+	"id": "note-quill",
+	"name": "Note Quill",
+	"version": "0.1.0",
+	"minAppVersion": "1.6.0",
+	"description": "Provide a minimal scaffold for building a custom Obsidian plugin.",
+	"author": "chenzhongjun",
+	"isDesktopOnly": false
+}
