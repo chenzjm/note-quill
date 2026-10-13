@@ -5,8 +5,19 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
 	{ ignores: ["main.js", "node_modules/"] },
 	eslint.configs.recommended,
-	...tseslint.configs.recommended,
-	obsidianmd.configs.recommended,
+	...tseslint.configs.recommendedTypeChecked,
+	{
+		languageOptions: {
+			parserOptions: {
+				project: true,
+				tsconfigRootDir: import.meta.dirname,
+			},
+		},
+	},
+	{
+		plugins: { obsidianmd },
+		rules: { ...obsidianmd.configs.recommended },
+	},
 	{
 		rules: {
 			"no-unused-vars": "off",

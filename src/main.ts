@@ -2,7 +2,7 @@ import { Notice, Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, NoteQuillSettingTab, type NoteQuillSettings } from "./settings";
 
 export default class NoteQuillPlugin extends Plugin {
-	settings: NoteQuillSettings;
+	settings: NoteQuillSettings = DEFAULT_SETTINGS;
 
 	async onload() {
 		await this.loadSettings();
@@ -17,7 +17,7 @@ export default class NoteQuillPlugin extends Plugin {
 		});
 
 		// Ribbon icon
-		this.addRibbonIcon("feather", "Note Quill: say hello", () => {
+		this.addRibbonIcon("feather", "Say hello", () => {
 			new Notice(`Hello, ${this.settings.greetingName}!`);
 		});
 
@@ -39,7 +39,8 @@ export default class NoteQuillPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const stored = (await this.loadData()) as Partial<NoteQuillSettings>;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
 	}
 
 	async saveSettings() {
