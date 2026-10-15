@@ -13,6 +13,12 @@ This is an independent, unofficial plugin: it only parses XML that you export fr
 | Notes | no network access, no telemetry, no accounts, no paid features |
 | Requires | Obsidian 1.6.0 or newer · desktop and mobile |
 
+> **Also available inside Schema Studio.** The same importer is integrated as a third domain tab
+> (“xxl-job”) in [Schema Studio](https://github.com/chenzjm/api-db-schema-tools). Since 2026-10-15 the
+> actively developed source copy lives in that repository under `src/xxljob/`; **this repository is the
+> standalone-plugin distribution** (community directory / BRAT releases) and no longer pushes the
+> bundle anywhere — `./sync.sh` only deploys this plugin itself.
+
 ## Installation
 
 **Community directory** — Settings → Community plugins → Browse → search for “XXL-Job Flow Atlas”.
