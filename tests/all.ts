@@ -185,11 +185,16 @@ test("模板驱动：章节与模板完全一致", () => {
 	const flowTplHeadings = headingsOf(TEMPLATES.taskFlow ?? "");
 	assert.deepEqual(headingsOf(flow.content), flowTplHeadings);
 
-	// 批任务：任务说明 + 对应任务流（任务参数只在 frontmatter）
+	// 批任务：归属章节排在任务说明之前；任务参数只在 frontmatter
 	const taskA = plans.find((p) => p.title === "任务A")!;
-	assert.deepEqual(headingsOf(taskA.content), ["# 任务说明", "# 对应任务流"], taskA.content);
+	assert.deepEqual(headingsOf(taskA.content), ["# 对应任务流", "# 任务说明"], taskA.content);
 	assert.match(taskA.content, /^任务参数: /m); // frontmatter 里有
 	assert.doesNotMatch(taskA.content, /# 任务参数/);
+
+	// 任务组件同理：# 对应批任务 在 # 任务说明 之前
+	const compHeadings = headingsOf(plans.find((p) => p.title === "组件A1")!.content);
+	assert.equal(compHeadings[0], "# 对应批任务");
+	assert.equal(compHeadings[1], "# 任务说明");
 
 	// 任务组件：六个章节与模板一致，顺序一致
 	const compA1 = plans.find((p) => p.title === "组件A1")!;

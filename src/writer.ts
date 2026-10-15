@@ -154,8 +154,9 @@ export interface LinkSection {
 
 /**
  * 在正文里保证存在指定一级章节：
- * - 已有该标题 → 整节替换（到下一个一级标题或文末）
- * - 没有 → 插在第一个 mermaid 块之后；无 mermaid 则追加到文末
+ * - 已有该标题 → 整节替换（原地，到下一个一级标题或文末）
+ * - 没有 → 插在「# 任务说明」之前（归属关系排在任务说明前面）
+ * - 没有「# 任务说明」→ 插在第一个 mermaid 之后；再没有则追加到文末
  */
 function upsertSection(body: string, heading: string, content: string): string {
 	const m = new RegExp(`^#[ \\t]+${heading}[ \\t]*$`, "m").exec(body);
@@ -167,13 +168,18 @@ function upsertSection(body: string, heading: string, content: string): string {
 		const tail = body.slice(end).replace(/^\n+/, "");
 		return `${body.slice(0, start)}# ${heading}\n\n${content}\n\n${tail}`;
 	}
+	const section = `# ${heading}\n\n${content}\n\n`;
+	const taskNote = /^#[ \t]+任务说明[ \t]*$/m.exec(body);
+	if (taskNote && taskNote.index !== undefined) {
+		return `${body.slice(0, taskNote.index)}${section}${body.slice(taskNote.index)}`;
+	}
 	const mm = /```mermaid[\s\S]*?```/.exec(body);
 	if (mm) {
 		const at = mm.index + mm[0].length;
 		const tail = body.slice(at).replace(/^\n+/, "");
-		return `${body.slice(0, at)}\n\n# ${heading}\n\n${content}\n\n${tail}`;
+		return `${body.slice(0, at)}\n\n${section}${tail}`;
 	}
-	return `${body.replace(/\s+$/, "")}\n\n# ${heading}\n\n${content}\n`;
+	return `${body.replace(/\s+$/, "")}\n\n${section}`;
 }
 
 /**
