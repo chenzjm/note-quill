@@ -3,3 +3,7 @@ main.js
 data.json
 *.log
 .DS_Store
+.testtmp/
+.dryrun/
+fixtures/
+*.local.xml

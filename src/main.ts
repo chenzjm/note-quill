@@ -1,5 +1,6 @@
-import { Notice, Plugin } from "obsidian";
+import { Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, FlowAtlasSettingTab, type FlowAtlasSettings } from "./settings";
+import { XxlImportModal } from "./ui/importModal";
 
 export default class FlowAtlasPlugin extends Plugin {
 	settings: FlowAtlasSettings = DEFAULT_SETTINGS;
@@ -7,35 +8,30 @@ export default class FlowAtlasPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		const openWizard = () => {
+			new XxlImportModal(this.app, {
+				docsFolder: this.settings.docsFolder,
+				policy: () => this.settings.conflictPolicy,
+				getExecutors: () => this.settings.executors,
+				onExecutorsChanged: async (next) => {
+					this.settings.executors = next;
+					await this.saveSettings();
+				},
+			}).open();
+		};
+
 		// Command (no default hotkey: it may conflict with the user's bindings)
 		this.addCommand({
 			id: "import-xml",
-			name: "Import xxl-job tasks",
-			callback: () => {
-				new Notice("Import wizard coming soon.");
-			},
+			name: "导入 xxl-job 任务 XML",
+			callback: () => openWizard(),
 		});
 
 		// Ribbon icon
-		this.addRibbonIcon("upload-cloud", "Import xxl-job tasks", () => {
-			new Notice("Import wizard coming soon.");
-		});
-
-		// Status bar item: shows the active file name
-		const statusBarItem = this.addStatusBarItem();
-		this.registerEvent(
-			this.app.workspace.on("file-open", (file) => {
-				statusBarItem.setText(file ? file.basename : "");
-			}),
-		);
+		this.addRibbonIcon("upload-cloud", "导入 xxl-job 任务 XML", () => openWizard());
 
 		// Settings tab
 		this.addSettingTab(new FlowAtlasSettingTab(this.app, this));
-	}
-
-	onunload() {
-		// Only clean up resources NOT managed by register*.
-		// Do NOT detach leaves here (it breaks the user's workspace layout).
 	}
 
 	async loadSettings() {

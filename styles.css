@@ -1,5 +1,103 @@
-/* Note Quill styles */
+/* XXL-Job Flow Atlas：导入向导样式 */
 
-.note-quill-hello {
+.xxlfa-hidden {
+	display: none;
+}
+
+.xxlfa-steps {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.xxlfa-chip {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 2px 8px;
+}
+
+.xxlfa-chip-on {
 	color: var(--text-accent);
+	border-color: var(--text-accent);
+}
+
+.xxlfa-body {
+	max-height: 55vh;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.xxlfa-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin: 6px 0 10px;
+}
+
+.xxlfa-row {
+	margin-bottom: 8px;
+}
+
+.xxlfa-list {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 6px 8px;
+}
+
+.xxlfa-list-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	padding: 2px 0;
+}
+
+.xxlfa-tree {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 8px;
+	max-height: 30vh;
+	overflow-y: auto;
+}
+
+.xxlfa-tree-row {
+	white-space: pre-wrap;
+	padding: 1px 0;
+}
+
+.xxlfa-muted {
+	color: var(--text-muted);
+}
+
+.xxlfa-warn {
+	color: var(--text-warning);
+}
+
+.xxlfa-warnbox {
+	margin-top: 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: 8px;
+}
+
+.xxlfa-group {
+	margin-top: 8px;
+}
+
+.xxlfa-group-title {
+	font-weight: var(--font-semibold);
+	margin-bottom: 2px;
+}
+
+.xxlfa-link {
+	display: block;
+	font-size: var(--font-ui-smaller);
+	word-break: break-all;
+}
+
+.xxlfa-footer {
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: 8px;
 }
