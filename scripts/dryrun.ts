@@ -6,7 +6,7 @@ import { parseXxlXml } from "../src/parser";
 import { buildFlowTree } from "../src/mapping";
 import { buildImportPlans } from "../src/writer";
 import { guessExecutorFromFileName, sanitizeExecutorDir } from "../src/executors";
-import { mergeFrontmatter } from "../src/frontmatter";
+import { mergePreservingBody } from "../src/writer";
 import type { ParsedJob } from "../src/types";
 
 const args = process.argv.slice(2);
@@ -74,7 +74,7 @@ for (const plan of plans) {
 		} else if (policyArg === "skip") {
 			skipped += 1;
 		} else if (policyArg === "update") {
-			writeFileSync(target, mergeFrontmatter(readFileSync(target, "utf-8"), plan.content), "utf-8");
+			writeFileSync(target, mergePreservingBody(readFileSync(target, "utf-8"), plan.content), "utf-8");
 			updated += 1;
 		} else {
 			let i = 2;

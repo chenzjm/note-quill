@@ -1,6 +1,6 @@
 {
 	"name": "xxljob-flow-atlas",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Import xxl-job exported task XML into structured task-flow / task / task-component documents.",
 	"main": "main.js",
 	"scripts": {

@@ -1,7 +1,7 @@
 {
 	"id": "xxljob-flow-atlas",
 	"name": "XXL-Job Flow Atlas",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"minAppVersion": "1.6.0",
 	"description": "Import xxl-job exported task XML into structured task-flow / task / task-component documents.",
 	"author": "chenzhongjun",

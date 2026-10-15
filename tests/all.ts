@@ -4,7 +4,7 @@ import { test, skip } from "node:test";
 import assert from "node:assert/strict";
 import { parseXxlXml } from "../src/parser";
 import { buildFlowTree, mapEnum, ROUTE_MAP, resolveJobBeanName, sanitizeFileName } from "../src/mapping";
-import { buildImportPlans, type TemplateSources } from "../src/writer";
+import { buildImportPlans, mergePreservingBody, type TemplateSources } from "../src/writer";
 import { splitFrontmatter } from "../src/frontmatter";
 
 // 测试脚本统一从仓库根目录执行（npm test）
@@ -134,13 +134,19 @@ test("合成样例：三遍法生成 6 份文档", () => {
 
 	const taskA = plans.find((p) => p.title === "任务A")!;
 	assert.match(taskA.content, /fileClass: 批任务/);
-	assert.match(taskA.content, /对应任务流名称: 主链路/);
+	// 归属关系写在正文「# 对应任务流」章节，用双链引入任务流文档
+	assert.match(taskA.content, /# 对应任务流/);
+	assert.match(taskA.content, /\[\[8\.xxljob\/测试执行器\/任务流\/主链路\|主链路\]\]/);
+	assert.doesNotMatch(taskA.content, /对应任务流名称/);
 	assert.match(taskA.content, /\[\[8\.xxljob\/测试执行器\/任务组件\/组件A1\|组件A1\]\]/);
 	assert.match(taskA.content, /任务参数: "\{\\"pageSize\\":500/); // 参数反转义保留
 
 	const compA1 = plans.find((p) => p.title === "组件A1")!;
 	assert.match(compA1.content, /fileClass: 任务组件/);
-	assert.match(compA1.content, /对应批任务名称: 任务A/);
+	// 归属关系写在正文「# 对应批任务」章节，用双链引入批任务文档
+	assert.match(compA1.content, /# 对应批任务/);
+	assert.match(compA1.content, /\[\[8\.xxljob\/测试执行器\/任务\/任务A\|任务A\]\]/);
+	assert.doesNotMatch(compA1.content, /对应批任务名称/);
 	assert.match(compA1.content, /路由策略: 一致性hash/);
 	assert.match(compA1.content, /阻塞处理策略: 丢弃后续调度/);
 	assert.match(compA1.content, /jobBeanName: beanA1Job/);
@@ -179,9 +185,9 @@ test("模板驱动：章节与模板完全一致", () => {
 	const flowTplHeadings = headingsOf(TEMPLATES.taskFlow ?? "");
 	assert.deepEqual(headingsOf(flow.content), flowTplHeadings);
 
-	// 批任务：模板只有「# 任务说明」，任务参数只在 frontmatter
+	// 批任务：任务说明 + 对应任务流（任务参数只在 frontmatter）
 	const taskA = plans.find((p) => p.title === "任务A")!;
-	assert.deepEqual(headingsOf(taskA.content), ["# 任务说明"], taskA.content);
+	assert.deepEqual(headingsOf(taskA.content), ["# 任务说明", "# 对应任务流"], taskA.content);
 	assert.match(taskA.content, /^任务参数: /m); // frontmatter 里有
 	assert.doesNotMatch(taskA.content, /# 任务参数/);
 
@@ -233,6 +239,73 @@ test("模板驱动：无法推断的人工项保留填写提示，示例 mermaid
 	assert.match(compA1.content, /本页维护当前契约/);
 });
 
+test("归属章节：批任务引入任务流、任务组件引入批任务（模板与回退两条路径）", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const withTpl = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
+	const bare = buildImportPlans(tree, () => "测试执行器", { templates: {} });
+	for (const [label, res] of [
+		["模板", withTpl],
+		["回退", bare],
+	] as const) {
+		const taskA = res.plans.find((p) => p.title === "任务A")!;
+		const compA1 = res.plans.find((p) => p.title === "组件A1")!;
+		const taskBody = bodyOf(taskA.content);
+		const compBody = bodyOf(compA1.content);
+		assert.match(taskBody, /# 对应任务流\n\n\[\[8\.xxljob\/测试执行器\/任务流\/主链路\|主链路\]\]/, `${label} 批任务: ${taskBody}`);
+		assert.match(compBody, /# 对应批任务\n\n\[\[8\.xxljob\/测试执行器\/任务\/任务A\|任务A\]\]/, `${label} 任务组件: ${compBody}`);
+		// frontmatter 里不再有归属键（已从 fileClass 移除）
+		assert.doesNotMatch(fmOf(taskA.content), /对应任务流名称/, `${label} 批任务 fm`);
+		assert.doesNotMatch(fmOf(compA1.content), /对应批任务名称/, `${label} 任务组件 fm`);
+	}
+	// 任务流文档没有归属章节（它是最上层）
+	const flow = withTpl.plans.find((p) => p.kind === "任务流")!;
+	assert.doesNotMatch(bodyOf(flow.content), /# 对应任务流/);
+});
+
+test("update 合并：清掉废弃键、补归属章节、保留手写正文", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
+	const taskA = plans.find((p) => p.title === "任务A")!;
+	const old = [
+		"---",
+		"fileClass: 批任务",
+		"执行器: 测试执行器",
+		"对应任务流名称: 主链路", // 已从 fileClass 移除的废弃键
+		"任务名称: 任务A",
+		"---",
+		"",
+		"# 任务说明",
+		"",
+		"手写补充：这段人工说明必须保留",
+		"",
+	].join("\n");
+	const merged = mergePreservingBody(old, taskA.content);
+	assert.doesNotMatch(merged, /对应任务流名称/, "废弃键应随 frontmatter 整体替换而消失");
+	assert.match(merged, /手写补充：这段人工说明必须保留/);
+	assert.match(bodyOf(merged), /# 对应任务流\n\n\[\[8\.xxljob\/测试执行器\/任务流\/主链路\|主链路\]\]/);
+
+	// 旧的归属章节会被刷新（例如父级改了名字/位置）
+	const stale = [
+		"---",
+		"fileClass: 批任务",
+		"任务名称: 任务A",
+		"---",
+		"",
+		"# 任务说明",
+		"",
+		"正文",
+		"",
+		"# 对应任务流",
+		"",
+		"[[8.xxljob/旧执行器/任务流/旧名称|旧名称]]",
+		"",
+	].join("\n");
+	const refreshed = mergePreservingBody(stale, taskA.content);
+	assert.doesNotMatch(refreshed, /旧执行器/);
+	assert.match(bodyOf(refreshed), /\[\[8\.xxljob\/测试执行器\/任务流\/主链路\|主链路\]\]/);
+	assert.match(refreshed, /# 任务说明/);
+});
+
 test("无模板时回退内置结构", () => {
 	const tree = buildFlowTree([parseXxlXml(synthetic)]);
 	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: {} });
@@ -277,9 +350,9 @@ test("真实样例A：担保函链路（无 MAIN，顶层 VIRTUAL → 2 组件�
 	assert.equal(plans.length, 3);
 	const up = plans.find((p) => p.title === "担保函上传任务组件")!;
 	assert.match(up.content, /jobBeanName: letterOfGuaranteeUploadJob/);
-	// 顶层 VIRTUAL 的对应任务流名称为待确认
+	// 顶层 VIRTUAL（链路入口）没有任务流：正文「# 对应任务流」标待确认
 	const task = plans.find((p) => p.kind === "批任务")!;
-	assert.match(task.content, /对应任务流名称: 待确认/);
+	assert.match(bodyOf(task.content), /# 对应任务流\n\n待确认（链路入口，暂无所属任务流）/);
 });
 
 test("真实样例B：账务文件链路（MAIN → 3 任务 → 3 组件）", { skip: !hasB && "fixture 不存在" }, () => {
@@ -297,16 +370,25 @@ test("真实样例B：账务文件链路（MAIN → 3 任务 → 3 组件）", {
 	const flow = plans.find((p) => p.kind === "任务流")!;
 	assert.match(flow.content, /任务\/【蚂蚁星河-广州盛大】账务文件-数据加工/);
 	assert.match(flow.content, /任务\/【蚂蚁星河-广州盛大】账务文件-文件上传/);
-	// 批任务回链任务流
+	// 批任务正文回链任务流
 	const task = plans.find((p) => p.title === "【蚂蚁星河-广州盛大】账务文件-数据加工")!;
-	assert.match(task.content, /对应任务流名称: 【蚂蚁星河-广州盛大】账务文件-加工生成及上传/);
+	assert.match(
+		bodyOf(task.content),
+		/# 对应任务流\n\n\[\[8\.xxljob\/通用保险执行器\/任务流\/【蚂蚁星河-广州盛大】账务文件-加工生成及上传\|【蚂蚁星河-广州盛大】账务文件-加工生成及上传\]\]/,
+	);
 	// jobBeanName 是任务组件级字段：在数据加工组件文档上断言
 	const dataComp = plans.find((p) => p.title === "【账务文件配置】数据加工")!;
-	assert.match(dataComp.content, /对应批任务名称: 【蚂蚁星河-广州盛大】账务文件-数据加工/);
+	assert.match(
+		bodyOf(dataComp.content),
+		/# 对应批任务\n\n\[\[8\.xxljob\/通用保险执行器\/任务\/【蚂蚁星河-广州盛大】账务文件-数据加工\|【蚂蚁星河-广州盛大】账务文件-数据加工\]\]/,
+	);
 	assert.match(dataComp.content, /jobBeanName: assetfileProcessJob/);
 	// 组件回链批任务
 	const comps = plans.filter((p) => p.kind === "任务组件");
-	assert.ok(comps.every((c) => /对应批任务名称: 【蚂蚁星河/.test(c.content)), comps.map((c) => c.title).join(","));
+	assert.ok(
+		comps.every((c) => /# 对应批任务\n\n\[\[8\.xxljob\/通用保险执行器\/任务\//.test(bodyOf(c.content))),
+		comps.map((c) => c.title).join(","),
+	);
 	// 未识别枚举警告为 0（样例枚举均在映射表内）
 	assert.equal(warnings.filter((w) => w.includes("未识别")).length, 0, warnings.join("; "));
 });

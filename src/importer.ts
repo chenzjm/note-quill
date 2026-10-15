@@ -1,6 +1,6 @@
 import { App, TFile } from "obsidian";
 import type { FilePlan } from "./types";
-import { mergeFrontmatter } from "./frontmatter";
+import { mergePreservingBody } from "./writer";
 import type { ConflictPolicy } from "./settings";
 
 export interface ImportOutcome {
@@ -56,7 +56,7 @@ export async function applyPlans(
 			}
 			if (policy === "update") {
 				const old = await app.vault.cachedRead(existing);
-				await app.vault.modify(existing, mergeFrontmatter(old, p.content));
+				await app.vault.modify(existing, mergePreservingBody(old, p.content));
 				outcome.updated.push(p.path);
 				continue;
 			}

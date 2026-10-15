@@ -8,7 +8,6 @@ import {
 	levelToDocKind,
 	mapEnum,
 	parentTaskFlowName,
-	parentTaskName,
 	resolveJobBeanName,
 	sanitizeFileName,
 	type FlowTree,
@@ -35,13 +34,9 @@ function yamlScalar(value: string): string {
 	return value;
 }
 
-function frontmatter(lines: string[]): string {
-	return `---\n${lines.join("\n")}\n---`;
-}
-
-/** 无模板时的 frontmatter：按给定键顺序输出 */
+/** 无模板时的 frontmatter 行（不含 --- 分隔符） */
 function fmBlock(values: Record<string, string | undefined>): string {
-	return frontmatter(Object.entries(values).map(([k, v]) => `${k}: ${yamlScalar(v ?? "")}`));
+	return Object.entries(values).map(([k, v]) => `${k}: ${yamlScalar(v ?? "")}`).join("\n");
 }
 
 // ---------- mermaid 生成 ----------
@@ -149,6 +144,57 @@ function replaceFirstMermaid(body: string, replacement: string): string {
 	return body.slice(0, m.index) + replacement + body.slice(m.index + m[0].length);
 }
 
+// ---------- 归属章节（# 对应任务流 / # 对应批任务） ----------
+
+/** 归属关系的正文章节：标题 + 内容（wiki 双链或待确认） */
+export interface LinkSection {
+	heading: string;
+	content: string;
+}
+
+/**
+ * 在正文里保证存在指定一级章节：
+ * - 已有该标题 → 整节替换（到下一个一级标题或文末）
+ * - 没有 → 插在第一个 mermaid 块之后；无 mermaid 则追加到文末
+ */
+function upsertSection(body: string, heading: string, content: string): string {
+	const m = new RegExp(`^#[ \\t]+${heading}[ \\t]*$`, "m").exec(body);
+	if (m) {
+		const start = m.index;
+		const after = start + m[0].length;
+		const next = /^#[ \t]+\S/m.exec(body.slice(after));
+		const end = next ? after + next.index : body.length;
+		const tail = body.slice(end).replace(/^\n+/, "");
+		return `${body.slice(0, start)}# ${heading}\n\n${content}\n\n${tail}`;
+	}
+	const mm = /```mermaid[\s\S]*?```/.exec(body);
+	if (mm) {
+		const at = mm.index + mm[0].length;
+		const tail = body.slice(at).replace(/^\n+/, "");
+		return `${body.slice(0, at)}\n\n# ${heading}\n\n${content}\n\n${tail}`;
+	}
+	return `${body.replace(/\s+$/, "")}\n\n# ${heading}\n\n${content}\n`;
+}
+
+/**
+ * 父级文档的 [[双链]]，形如 [[8.xxljob/执行器/任务流/名称|名称]]。
+ * 父不存在（链路入口）时返回 undefined，由调用方标「待确认」。
+ */
+function parentLink(
+	tree: FlowTree,
+	job: ParsedJob,
+	executorFor: (job: ParsedJob) => string,
+	docsFolder: string,
+	parentDir: string,
+): string | undefined {
+	const parentId = tree.parentOf.get(job.id);
+	if (!parentId) return undefined;
+	const parent = tree.byId.get(parentId);
+	if (!parent) return undefined;
+	const title = sanitizeFileName(parent.jobDesc || parent.yrJobName || parent.id);
+	return `[[${docsFolder}/${executorFor(parent)}/${parentDir}/${title}|${title}]]`;
+}
+
 // ---------- 模板驱动渲染 ----------
 
 export interface TemplateSources {
@@ -205,14 +251,22 @@ function renderDoc(
 	values: Record<string, string | undefined>,
 	fills: BodyFill[],
 	mermaid: string | undefined,
-	fallback: () => string,
+	fallbackBody: () => string,
+	sections: LinkSection[] = [],
 ): string {
 	const split = raw ? splitFrontmatter(raw) : undefined;
-	if (!split) return fallback();
-	const fm = applyFrontmatter(split.fm, values);
-	let body = split.body;
-	if (mermaid !== undefined) body = replaceFirstMermaid(body, mermaid);
-	body = fillPlaceholders(body, fills);
+	let fm: string;
+	let body: string;
+	if (split) {
+		fm = applyFrontmatter(split.fm, values);
+		body = split.body;
+		if (mermaid !== undefined) body = replaceFirstMermaid(body, mermaid);
+		body = fillPlaceholders(body, fills);
+	} else {
+		fm = fmBlock(values);
+		body = fallbackBody();
+	}
+	for (const s of sections) body = upsertSection(body, s.heading, s.content);
 	return `---\n${fm}\n---\n${body.startsWith("\n") ? body : `\n${body}`}`;
 }
 
@@ -235,6 +289,39 @@ function pageSizeNote(job: ParsedJob): string | undefined {
 	const ps = job.paramJson?.["pageSize"];
 	if (ps === undefined) return undefined; // 无分页参数 → 保留模板提示
 	return `涉及分页，pageSize=${asText(ps)}。排序规则：待确认。`;
+}
+
+/** 归属章节标题（不再进 frontmatter，改写在正文并用双链引入父级文档） */
+export const LINK_HEADINGS = ["对应任务流", "对应批任务"] as const;
+
+/** 读取正文中指定一级章节的内容（不含标题行） */
+function readSection(body: string, heading: string): string | undefined {
+	const m = new RegExp(`^#[ \\t]+${heading}[ \\t]*$`, "m").exec(body);
+	if (!m) return undefined;
+	const after = m.index + m[0].length;
+	const next = /^#[ \t]+\S/m.exec(body.slice(after));
+	const end = next ? after + next.index : body.length;
+	return body.slice(after, end).replace(/^\n+/, "").trim();
+}
+
+/**
+ * update 策略下的合并：保留旧文档手写正文，但
+ * 1) frontmatter 整体替换为新生成的（顺带清掉已废弃的 对应任务流名称 / 对应批任务名称）
+ * 2) 归属章节（# 对应任务流 / # 对应批任务）以新内容为准插入或刷新
+ */
+export function mergePreservingBody(oldContent: string, newContent: string): string {
+	const o = splitFrontmatter(oldContent);
+	const n = splitFrontmatter(newContent);
+	if (!n) return newContent;
+	if (!o) return `${newContent}\n${oldContent}`;
+	let body = o.body;
+	for (const h of LINK_HEADINGS) {
+		const content = readSection(n.body, h);
+		if (content === undefined) continue;
+		body = upsertSection(body, h, content);
+	}
+	const merged = body.startsWith("\n") ? body : `\n${body}`;
+	return `---\n${n.fm}\n---\n${merged}`;
 }
 
 // ---------- 来源信息（不再写进正文，改由 plan 返回供状态文件记录） ----------
@@ -343,11 +430,10 @@ function taskFlowFm(job: ParsedJob, executor: string): Record<string, string | u
 	};
 }
 
-function taskFm(tree: FlowTree, job: ParsedJob, executor: string): Record<string, string | undefined> {
+function taskFm(job: ParsedJob, executor: string): Record<string, string | undefined> {
 	return {
 		fileClass: "批任务",
 		执行器: executor,
-		对应任务流名称: parentTaskFlowName(tree, job) ?? "待确认",
 		任务名称: job.jobDesc,
 		负责人: job.author ?? "待确认",
 		任务参数: job.executorParam,
@@ -355,7 +441,7 @@ function taskFm(tree: FlowTree, job: ParsedJob, executor: string): Record<string
 	};
 }
 
-function componentFm(tree: FlowTree, job: ParsedJob, executor: string): { values: Record<string, string | undefined>; warnings: string[] } {
+function componentFm(job: ParsedJob, executor: string): { values: Record<string, string | undefined>; warnings: string[] } {
 	const sharding = extractShardingParam(job.paramJson);
 	const warnings: string[] = [];
 	const route = mapEnum(ROUTE_MAP, job.routeStrategy);
@@ -366,7 +452,6 @@ function componentFm(tree: FlowTree, job: ParsedJob, executor: string): { values
 		values: {
 			fileClass: "任务组件",
 			执行器: executor,
-			对应批任务名称: parentTaskName(tree, job) ?? "待确认",
 			任务组件名称: job.jobDesc,
 			阻塞处理策略: block ?? "单机串行",
 			jobBeanName: resolveJobBeanName(job) ?? "待确认",
@@ -419,7 +504,7 @@ export function buildImportPlans(
 	for (const job of components) {
 		const executor = executorFor(job);
 		const title = titleOf.get(job.id)!;
-		const { values, warnings: ws } = componentFm(tree, job, executor);
+		const { values, warnings: ws } = componentFm(job, executor);
 		for (const w of ws) warnings.push(`任务组件「${job.jobDesc}」${w}`);
 		const summary = `本任务组件来自 xxl-job 导入：${job.jobDesc}${values.jobBeanName ? `；jobBeanName: ${values.jobBeanName}` : "；jobBeanName: 待确认"}。`;
 		const content = renderDoc(
@@ -431,7 +516,8 @@ export function buildImportPlans(
 				{ re: /分页/, value: pageSizeNote(job) },
 			],
 			buildComponentMermaid(job),
-			() => `${fmBlock(values)}\n\n${fallbackComponentBody(job)}`,
+			() => fallbackComponentBody(job),
+			[{ heading: "对应批任务", content: parentLink(tree, job, executorFor, docsFolder, "任务") ?? "待确认（未归属到批任务）" }],
 		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
@@ -447,7 +533,7 @@ export function buildImportPlans(
 	for (const job of tasks) {
 		const executor = executorFor(job);
 		const title = titleOf.get(job.id)!;
-		const values = taskFm(tree, job, executor);
+		const values = taskFm(job, executor);
 		const parentFlow = parentTaskFlowName(tree, job);
 		const childCount = job.childrenIds.filter((c) => tree.byId.has(c)).length;
 		const summary = `本任务来自 xxl-job 导入：${job.jobDesc}；属【${parentFlow ?? "待确认"}】任务流的编排节点，下辖 ${childCount} 个任务组件。任务参数见 frontmatter。失败处理：待确认。`;
@@ -456,7 +542,8 @@ export function buildImportPlans(
 			values,
 			[{ re: /任务简述|批任务简述/, value: summary }],
 			buildParentMermaid(tree, job, "任务组件", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, childLinkBaseOf),
-			() => `${fmBlock(values)}\n\n${fallbackTaskBody(tree, job, docsFolder, executorFor)}`,
+			() => fallbackTaskBody(tree, job, docsFolder, executorFor),
+			[{ heading: "对应任务流", content: parentLink(tree, job, executorFor, docsFolder, "任务流") ?? "待确认（链路入口，暂无所属任务流）" }],
 		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
@@ -481,7 +568,7 @@ export function buildImportPlans(
 			values,
 			[{ re: /任务流简述|任务简述/, value: summary }],
 			buildParentMermaid(tree, job, "任务", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, childLinkBaseOf),
-			() => `${fmBlock(values)}\n\n${fallbackTaskFlowBody(tree, job, docsFolder, executorFor)}`,
+			() => fallbackTaskFlowBody(tree, job, docsFolder, executorFor),
 		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
@@ -494,10 +581,10 @@ export function buildImportPlans(
 	}
 
 	// 顶层入口（无 MAIN 的链路，如文件A 顶层 VIRTUAL）已在 plans 中，无需特殊处理；
-	// 但入口 VIRTUAL 的「对应任务流名称」为 待确认，提醒用户。
+	// 但入口 VIRTUAL 的「对应任务流」为 待确认，提醒用户。
 	for (const job of tasks) {
 		if (!tree.parentOf.has(job.id)) {
-			warnings.push(`批任务「${job.jobDesc}」没有所属任务流（链路入口），frontmatter 对应任务流名称已标 待确认`);
+			warnings.push(`批任务「${job.jobDesc}」没有所属任务流（链路入口），正文「对应任务流」已标 待确认`);
 		}
 	}
 
