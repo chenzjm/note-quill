@@ -10,11 +10,10 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
-const context = await esbuild.context({
+const common = {
 	banner: {
 		js: banner,
 	},
-	entryPoints: ["src/main.ts"],
 	bundle: true,
 	external: [
 		"obsidian",
@@ -37,13 +36,27 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "main.js",
 	minify: prod,
-});
+};
+
+/**
+ * 两个产物：
+ * 1. main.js            —— 独立插件形态（Obsidian 直接加载）
+ * 2. xxljob-bundle.cjs  —— 子模块形态，供 Schema Studio 里 require('./xxljob-bundle.cjs') 集成
+ */
+const targets = [
+	{ entryPoints: ["src/main.ts"], outfile: "main.js" },
+	{ entryPoints: ["src/bundle.ts"], outfile: "xxljob-bundle.cjs" },
+];
 
 if (prod) {
-	await context.rebuild();
+	for (const t of targets) {
+		await esbuild.build({ ...common, ...t });
+	}
 	process.exit(0);
 } else {
-	await context.watch();
+	for (const t of targets) {
+		const ctx = await esbuild.context({ ...common, ...t });
+		await ctx.watch();
+	}
 }

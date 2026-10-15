@@ -11,7 +11,10 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VAULT="${VAULT_DIR:-/Users/chenzhongjun/Desktop/文档编辑器/消金业务合作平台/.obsidian/plugins/xxljob-flow-atlas}"
-FILES=(main.js manifest.json styles.css)
+FILES=(main.js manifest.json styles.css xxljob-bundle.cjs)
+# Schema Studio 插件目录（S7 起：bundle 也拷一份给 Studio require）
+STUDIO="${STUDIO_DIR:-$HOME/WorkBuddy/api-db-schema-tools}"
+STUDIO_VAULT="${STUDIO_VAULT_DIR:-/Users/chenzhongjun/Desktop/文档编辑器/消金业务合作平台/.obsidian/plugins/api-db-schema-tools}"
 
 if [ ! -d "$VAULT" ]; then
   echo "找不到 vault 插件目录：$VAULT" >&2
@@ -27,9 +30,23 @@ deploy_to_vault() {
   touch "$VAULT/.hotreload"
 }
 
+# 把 bundle 拷进 Schema Studio（源仓库 + vault 部署目录），供 require('./xxljob-bundle.cjs')
+deploy_bundle_to_studio() {
+  [ -f "$REPO/xxljob-bundle.cjs" ] || { echo "仓库缺少 xxljob-bundle.cjs（先 npm run build）" >&2; exit 1; }
+  for d in "$STUDIO" "$STUDIO_VAULT"; do
+    if [ -d "$d" ]; then
+      cp "$REPO/xxljob-bundle.cjs" "$d/xxljob-bundle.cjs"
+      echo "bundle 已同步：$d/xxljob-bundle.cjs"
+    else
+      echo "跳过（目录不存在）：$d" >&2
+    fi
+  done
+}
+
 case "${1:-}" in
   to-vault)
     deploy_to_vault
+    deploy_bundle_to_studio
     echo "已部署到 vault：$VAULT"
     ;;
   from-vault)
@@ -50,6 +67,7 @@ case "${1:-}" in
     echo "构建中…"
     npm run build >/dev/null
     deploy_to_vault
+    deploy_bundle_to_studio
     echo "已部署到 vault：$VAULT"
     git add -A
     git commit -m "$msg"

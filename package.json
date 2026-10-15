@@ -7,7 +7,8 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"lint": "eslint src/",
-		"test": "node scripts/test.mjs",
+		"test": "node scripts/test.mjs && node scripts/bundle-check.mjs",
+		"bundle:check": "node scripts/bundle-check.mjs",
 		"dryrun": "node scripts/dryrun.mjs",
 		"version": "node version-bump.mjs && git add manifest.json package.json versions.json"
 	},

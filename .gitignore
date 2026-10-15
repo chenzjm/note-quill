@@ -5,5 +5,6 @@ data.json
 .DS_Store
 .testtmp/
 .dryrun/
+dist/
 fixtures/
 *.local.xml
