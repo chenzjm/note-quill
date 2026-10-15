@@ -4,6 +4,8 @@ Import job definitions exported from an [xxl-job](https://github.com/xuxueli/xxl
 
 An xxl-job export is a `<linked-list>` of jobs nested three levels deep: a task flow (`MAIN`) contains N tasks (`VIRTUAL`), each task contains N task components (`COMPONENT`). This plugin mirrors that tree into Markdown — one note per job — and keeps re-imports idempotent.
 
+This is an independent, unofficial plugin: it only parses XML that you export from an xxl-job admin console, and is not affiliated with the xxl-job project or its maintainers.
+
 | | |
 |---|---|
 | Input | one XML, several XMLs, or a whole folder (only `.xml` files are read) |

@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -36,6 +37,8 @@ jobs:
         run: npm run build
 
       - name: Attest build provenance
+        # 推荐项而非必需项：仓库 / 账号策略不允许时不让它挡住 release
+        continue-on-error: true
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: "main.js"
