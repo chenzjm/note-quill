@@ -4,7 +4,9 @@ const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const versions = JSON.parse(readFileSync("versions.json", "utf8"));
 
-const targetVersion = process.argv[2];
+// npm 10 起不再把新版本号作为参数传给 version 脚本，改从 npm_package_version 取；
+// 直接调用时仍支持 `node version-bump.mjs 1.2.3`
+const targetVersion = process.argv[2] ?? process.env.npm_package_version;
 
 if (!targetVersion) {
 	console.error("Missing target version!");

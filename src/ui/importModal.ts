@@ -150,18 +150,20 @@ export class XxlImportModal extends Modal {
 	}
 
 	private pick(useDirectory: boolean): void {
-		const input = document.createElement("input");
-		input.type = "file";
+		// 隐藏的 input 挂在 modal 内部（不往 document.body 塞节点），选完即弃
+		const input = this.contentEl.createEl("input", {
+			cls: "xxlfa-hidden",
+			type: "file",
+		});
 		input.multiple = true;
 		input.accept = ".xml,text/xml,application/xml";
 		if (useDirectory) {
-			(input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
+			// 目录选择只在桌面端生效，移动端会退化为文件选择
+			input.setAttribute("webkitdirectory", "");
 		}
-		input.addClass("xxlfa-hidden");
 		input.addEventListener("change", () => {
 			void this.consumeFiles(input.files);
 		});
-		document.body.appendChild(input);
 		input.click();
 	}
 

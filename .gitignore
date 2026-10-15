@@ -1,5 +1,6 @@
 node_modules/
 main.js
+xxljob-bundle.cjs
 data.json
 *.log
 .DS_Store

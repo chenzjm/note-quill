@@ -1,4 +1,4 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, normalizePath } from "obsidian";
 import type { FilePlan } from "./types";
 import { mergePreservingBody } from "./writer";
 import type { ConflictPolicy } from "./settings";
@@ -30,7 +30,7 @@ export async function applyPlans(
 
 	// 预建目录
 	const dirs = new Set<string>();
-	for (const p of plans) dirs.add(dirOf(p.path));
+	for (const p of plans) dirs.add(dirOf(normalizePath(p.path)));
 	for (const d of dirs) {
 		if (!d) continue;
 		if (!(await app.vault.adapter.exists(d))) {
@@ -39,38 +39,40 @@ export async function applyPlans(
 	}
 
 	for (const p of plans) {
+		// 所有写入 vault 的路径都必须过 normalizePath（社区插件审核要求）
+		const path = normalizePath(p.path);
 		try {
-			const existing = app.vault.getAbstractFileByPath(p.path);
+			const existing = app.vault.getAbstractFileByPath(path);
 			if (!existing) {
-				await app.vault.create(p.path, p.content);
-				outcome.created.push(p.path);
+				await app.vault.create(path, p.content);
+				outcome.created.push(path);
 				continue;
 			}
 			if (!(existing instanceof TFile)) {
-				outcome.failed.push({ path: p.path, reason: "同名路径已存在且不是文件" });
+				outcome.failed.push({ path, reason: "同名路径已存在且不是文件" });
 				continue;
 			}
 			if (policy === "skip") {
-				outcome.skipped.push(p.path);
+				outcome.skipped.push(path);
 				continue;
 			}
 			if (policy === "update") {
 				const old = await app.vault.cachedRead(existing);
 				await app.vault.modify(existing, mergePreservingBody(old, p.content));
-				outcome.updated.push(p.path);
+				outcome.updated.push(path);
 				continue;
 			}
 			// rename：追加序号直到不冲突
 			let i = 2;
-			let target = p.path;
+			let target = path;
 			while (app.vault.getAbstractFileByPath(target)) {
-				target = p.path.replace(/\.md$/, ` (${i}).md`);
+				target = path.replace(/\.md$/, ` (${i}).md`);
 				i += 1;
 			}
 			await app.vault.create(target, p.content);
 			outcome.renamed.push(target);
 		} catch (e) {
-			outcome.failed.push({ path: p.path, reason: e instanceof Error ? e.message : String(e) });
+			outcome.failed.push({ path, reason: e instanceof Error ? e.message : String(e) });
 		}
 	}
 

@@ -20,7 +20,17 @@ jobs:
           node-version: "22"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Verify tag matches manifest version
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version=$(node -p "require('./manifest.json').version")
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag '$tag' 与 manifest.json 的 version '$version' 不一致"
+            exit 1
+          fi
+          echo "tag 与 manifest version 一致：$tag"
 
       - name: Build
         run: npm run build

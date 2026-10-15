@@ -8,7 +8,7 @@ import { buildImportPlans, mergePreservingBody, type TemplateSources } from "../
 import { splitFrontmatter } from "../src/frontmatter";
 
 // 测试脚本统一从仓库根目录执行（npm test）
-const TPL_DIR = join(process.cwd(), "tests/templates");
+const TPL_DIR = join(process.cwd(), "templates");
 const readTpl = (name: string): string | undefined => {
 	const p = join(TPL_DIR, name);
 	return existsSync(p) ? readFileSync(p, "utf-8") : undefined;

@@ -23,8 +23,8 @@ if (files.length === 0) {
 const outRoot = resolve(outArg);
 const docsFolder = "8.xxljob";
 
-// 模板：默认用仓库内 tests/templates 的副本；--templates=<dir> 可指定目录（如真实 vault 的 _template 目录）
-const tplArg = args.find((a) => a.startsWith("--templates="))?.split("=")[1] ?? "tests/templates";
+// 模板：默认用仓库内 templates 的副本；--templates=<dir> 可指定目录（如真实 vault 的 _template 目录）
+const tplArg = args.find((a) => a.startsWith("--templates="))?.split("=")[1] ?? "templates";
 const tplDir = resolve(tplArg);
 const readTpl = (name: string): string | undefined => {
 	const p = join(tplDir, name);
