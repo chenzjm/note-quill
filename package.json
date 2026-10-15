@@ -1,7 +1,7 @@
 {
-	"name": "note-quill",
+	"name": "xxljob-flow-atlas",
 	"version": "0.1.0",
-	"description": "Provide a minimal scaffold for building a custom Obsidian plugin.",
+	"description": "Import xxl-job exported task XML into structured task-flow / task / task-component documents.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

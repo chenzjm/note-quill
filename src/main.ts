@@ -1,24 +1,24 @@
 import { Notice, Plugin } from "obsidian";
-import { DEFAULT_SETTINGS, NoteQuillSettingTab, type NoteQuillSettings } from "./settings";
+import { DEFAULT_SETTINGS, FlowAtlasSettingTab, type FlowAtlasSettings } from "./settings";
 
-export default class NoteQuillPlugin extends Plugin {
-	settings: NoteQuillSettings = DEFAULT_SETTINGS;
+export default class FlowAtlasPlugin extends Plugin {
+	settings: FlowAtlasSettings = DEFAULT_SETTINGS;
 
 	async onload() {
 		await this.loadSettings();
 
 		// Command (no default hotkey: it may conflict with the user's bindings)
 		this.addCommand({
-			id: "hello",
-			name: "Say hello",
+			id: "import-xml",
+			name: "Import xxl-job tasks",
 			callback: () => {
-				new Notice(`Hello, ${this.settings.greetingName}!`);
+				new Notice("Import wizard coming soon.");
 			},
 		});
 
 		// Ribbon icon
-		this.addRibbonIcon("feather", "Say hello", () => {
-			new Notice(`Hello, ${this.settings.greetingName}!`);
+		this.addRibbonIcon("upload-cloud", "Import xxl-job tasks", () => {
+			new Notice("Import wizard coming soon.");
 		});
 
 		// Status bar item: shows the active file name
@@ -30,7 +30,7 @@ export default class NoteQuillPlugin extends Plugin {
 		);
 
 		// Settings tab
-		this.addSettingTab(new NoteQuillSettingTab(this.app, this));
+		this.addSettingTab(new FlowAtlasSettingTab(this.app, this));
 	}
 
 	onunload() {
@@ -39,7 +39,7 @@ export default class NoteQuillPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const stored = (await this.loadData()) as Partial<NoteQuillSettings>;
+		const stored = (await this.loadData()) as Partial<FlowAtlasSettings>;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
 	}
 

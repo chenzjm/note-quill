@@ -1,18 +1,18 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type NoteQuillPlugin from "./main";
+import type FlowAtlasPlugin from "./main";
 
-export interface NoteQuillSettings {
+export interface FlowAtlasSettings {
 	greetingName: string;
 }
 
-export const DEFAULT_SETTINGS: NoteQuillSettings = {
+export const DEFAULT_SETTINGS: FlowAtlasSettings = {
 	greetingName: "world",
 };
 
-export class NoteQuillSettingTab extends PluginSettingTab {
-	plugin: NoteQuillPlugin;
+export class FlowAtlasSettingTab extends PluginSettingTab {
+	plugin: FlowAtlasPlugin;
 
-	constructor(app: App, plugin: NoteQuillPlugin) {
+	constructor(app: App, plugin: FlowAtlasPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
