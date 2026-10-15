@@ -13,18 +13,35 @@ import {
 	sanitizeFileName,
 	type FlowTree,
 } from "./mapping";
-import type { FilePlan, ParsedJob } from "./types";
+import { splitFrontmatter } from "./frontmatter";
+import { asText } from "./util";
+import type { FilePlan, ParsedJob, SourceInfo } from "./types";
 
 // ---------- YAML frontmatter ----------
 
-/** 字符串值用 JSON.stringify 生成（JSON 转义与 YAML 双引号风格兼容），枚举原样 */
-function yv(value?: string): string {
-	if (value === undefined || value === "") return '""';
-	return JSON.stringify(value);
+/**
+ * 生成 YAML 标量：能用裸标量就用裸标量（与 vault 里手写文档、模板风格一致），
+ * 含特殊字符（引号、花括号、方括号、冒号、逗号、井号等）时才切双引号。
+ */
+function yamlScalar(value: string): string {
+	if (value === "") return '""';
+	if (value !== value.trim()) return JSON.stringify(value);
+	// 这些字符出现在 plain scalar 里会引起 YAML 歧义
+	if (/["'`{}[\],]/.test(value)) return JSON.stringify(value);
+	if (/(^|\s):|:\s/.test(value)) return JSON.stringify(value); // 冒号（键值分隔）
+	if (/\s#/.test(value)) return JSON.stringify(value); // 行内注释
+	// 首字符是 YAML 指示符（别名、锚点、块标量、序列项等）
+	if (/^[-?*&!|>%@]/.test(value)) return JSON.stringify(value);
+	return value;
 }
 
 function frontmatter(lines: string[]): string {
 	return `---\n${lines.join("\n")}\n---`;
+}
+
+/** 无模板时的 frontmatter：按给定键顺序输出 */
+function fmBlock(values: Record<string, string | undefined>): string {
+	return frontmatter(Object.entries(values).map(([k, v]) => `${k}: ${yamlScalar(v ?? "")}`));
 }
 
 // ---------- mermaid 生成 ----------
@@ -125,62 +142,122 @@ function buildComponentMermaid(job: ParsedJob): string {
 	return lines.join("\n");
 }
 
-// ---------- 参数表 ----------
-
-function buildParamTable(job: ParsedJob): string {
-	if (!job.executorParam) return "无任务参数。";
-	if (!job.paramJson) return `任务参数（JSON 解析失败，原样保留）：\n\n\`${job.executorParam}\``;
-	const rows = ["| 参数 | 值 |", "|---|---|"];
-	for (const [k, v] of Object.entries(job.paramJson)) {
-		rows.push(`| ${k} | \`${typeof v === "string" ? v : JSON.stringify(v)}\` |`);
-	}
-	return rows.join("\n");
+/** 把正文里第一个 mermaid 代码块整体替换（模板里带的是示例图） */
+function replaceFirstMermaid(body: string, replacement: string): string {
+	const m = body.match(/```mermaid[\s\S]*?```/);
+	if (!m || m.index === undefined) return `${body.replace(/\s*$/, "")}\n\n${replacement}\n`;
+	return body.slice(0, m.index) + replacement + body.slice(m.index + m[0].length);
 }
 
-function bizScope(job: ParsedJob): string {
-	if (!job.paramJson) return "待确认";
+// ---------- 模板驱动渲染 ----------
+
+export interface TemplateSources {
+	/** 任务流模板原文 */
+	taskFlow?: string;
+	/** 批任务模板原文 */
+	task?: string;
+	/** 任务组件模板原文 */
+	component?: string;
+}
+
+export interface BuildOptions {
+	docsFolder?: string;
+	templates?: TemplateSources;
+}
+
+/** 正文占位填充规则：命中关键词且有值时替换，否则保留模板里的 {{填写提示}} */
+interface BodyFill {
+	re: RegExp;
+	value?: string;
+}
+
+function fillPlaceholders(body: string, fills: BodyFill[]): string {
+	return body.replace(/\{\{([\s\S]*?)\}\}/g, (full, inner: string) => {
+		for (const f of fills) {
+			if (f.value !== undefined && f.value !== "" && f.re.test(inner)) return f.value;
+		}
+		return full;
+	});
+}
+
+/** 按模板原有键顺序重写 frontmatter：能确定的写真实值，其余保留模板里的填写提示 */
+function applyFrontmatter(tplFm: string, values: Record<string, string | undefined>): string {
+	const used = new Set<string>();
+	const lines = tplFm.split("\n").map((line) => {
+		const m = line.match(/^(\s*)([^:\s-][^:]*):\s*(.*)$/);
+		if (!m) return line; // 空行、注释、列表项原样保留
+		const key = m[2].trim();
+		const value = values[key];
+		if (value === undefined || value === "") return line;
+		used.add(key);
+		return `${m[1]}${key}: ${yamlScalar(value)}`;
+	});
+	for (const [key, value] of Object.entries(values)) {
+		if (value === undefined || value === "" || used.has(key)) continue;
+		lines.push(`${key}: ${yamlScalar(value)}`);
+	}
+	return lines.join("\n");
+}
+
+/** 套模板生成整篇文档；模板缺失或没有 frontmatter 时回退到内置结构 */
+function renderDoc(
+	raw: string | undefined,
+	values: Record<string, string | undefined>,
+	fills: BodyFill[],
+	mermaid: string | undefined,
+	fallback: () => string,
+): string {
+	const split = raw ? splitFrontmatter(raw) : undefined;
+	if (!split) return fallback();
+	const fm = applyFrontmatter(split.fm, values);
+	let body = split.body;
+	if (mermaid !== undefined) body = replaceFirstMermaid(body, mermaid);
+	body = fillPlaceholders(body, fills);
+	return `---\n${fm}\n---\n${body.startsWith("\n") ? body : `\n${body}`}`;
+}
+
+// ---------- 可推断的正文片段 ----------
+
+function bizScope(job: ParsedJob): string | undefined {
+	if (!job.paramJson) return undefined; // 无法推断 → 保留模板提示由人工填写
 	const items: string[] = [];
 	for (const [k, v] of Object.entries(job.paramJson)) {
 		if (/^(ORG_CODE|organCode|TENANT_ID|JOB_TRADE_CODE|bizMode|businessDim|businessType)$/.test(k)) {
-			items.push(`- ${k}: \`${String(v)}\``);
+			items.push(`- ${k}: \`${asText(v)}\``);
 		}
 	}
+	if (items.length === 0) return undefined;
 	items.push("- 其余业务范围：待确认");
 	return items.join("\n");
 }
 
-function pageSizeNote(job: ParsedJob): string {
+function pageSizeNote(job: ParsedJob): string | undefined {
 	const ps = job.paramJson?.["pageSize"];
-	if (ps === undefined) return "待确认";
-	const text = typeof ps === "string" ? ps : JSON.stringify(ps);
-	return `涉及分页，pageSize=${text}。排序规则：待确认。`;
+	if (ps === undefined) return undefined; // 无分页参数 → 保留模板提示
+	return `涉及分页，pageSize=${asText(ps)}。排序规则：待确认。`;
 }
 
-// ---------- 来源信息 ----------
+// ---------- 来源信息（不再写进正文，改由 plan 返回供状态文件记录） ----------
 
-function sourceInfo(job: ParsedJob): string {
-	const items: string[] = [];
-	if (job.author) items.push(`- 负责人（author）：${job.author}`);
-	if (job.addTime) items.push(`- 创建时间：${job.addTime}`);
-	if (job.updateTime) items.push(`- 更新时间：${job.updateTime}`);
-	items.push(`- 原 id：${job.id}`);
-	if (job.alarmMobile) items.push(`- 告警手机号：${job.alarmMobile}`);
-	return items.join("\n");
+function sourceInfo(job: ParsedJob): SourceInfo {
+	return {
+		jobId: job.id,
+		sourceFile: job.sourceFile,
+		author: job.author,
+		addTime: job.addTime,
+		updateTime: job.updateTime,
+		alarmMobile: job.alarmMobile,
+	};
 }
 
 const GUIDE_NOTE = "> 本页维护当前契约。本次差异、风险、测试结果与评审结论统一放在设计文档。按适用场景填写，未核实写待确认；不适用写依据。";
 
-// ---------- 三类文档正文 ----------
+// ---------- 三类文档正文（回退用：未配置模板时的内置结构） ----------
 
-function taskFlowBody(
-	tree: FlowTree,
-	job: ParsedJob,
-	docsFolder: string,
-	executorFor: (job: ParsedJob) => string,
-): string {
+function fallbackTaskFlowBody(tree: FlowTree, job: ParsedJob, docsFolder: string, executorFor: (job: ParsedJob) => string): string {
 	const cronDesc = job.cron ? `调度 Cron \`${job.cron}\`` : "无调度（被上层编排触发）";
 	const bizDate = mapEnum(BIZDATE_MAP, job.executeBizDateType);
-	const lines = [
+	return [
 		GUIDE_NOTE,
 		"",
 		"# 任务说明",
@@ -189,58 +266,31 @@ function taskFlowBody(
 		"",
 		`本任务流来自 xxl-job 导入：${job.jobDesc}；${cronDesc}${bizDate ? `；业务执行日期 ${bizDate}` : ""}。下辖 ${job.childrenIds.filter((c) => tree.byId.has(c)).length} 个任务。失败处理：待确认。`,
 		"",
-		buildParentMermaid(
-			tree,
-			job,
-			"任务",
-			(cid) => tree.byId.get(cid)?.jobDesc ?? cid,
-			(cid) => `${docsFolder}/${executorFor(tree.byId.get(cid)!)}`,
-		),
+		buildParentMermaid(tree, job, "任务", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, (cid) => `${docsFolder}/${executorFor(tree.byId.get(cid)!)}`),
 		"",
-		"# 来源信息",
-		sourceInfo(job),
-	];
-	return lines.join("\n");
+	].join("\n");
 }
 
-function taskBody(
-	tree: FlowTree,
-	job: ParsedJob,
-	docsFolder: string,
-	executorFor: (job: ParsedJob) => string,
-): string {
+function fallbackTaskBody(tree: FlowTree, job: ParsedJob, docsFolder: string, executorFor: (job: ParsedJob) => string): string {
 	const parentFlow = parentTaskFlowName(tree, job);
 	const childCount = job.childrenIds.filter((c) => tree.byId.has(c)).length;
-	const lines = [
+	return [
 		GUIDE_NOTE,
 		"",
 		"# 任务说明",
 		"> 说明该任务做什么、何时触发、失败如何处理。",
 		"> 使用流程图或者时序图说明。",
 		"",
-		`本任务来自 xxl-job 导入：${job.jobDesc}；属【${parentFlow ?? "待确认"}】任务流的编排节点，下辖 ${childCount} 个任务组件。失败处理：待确认。`,
+		`本任务来自 xxl-job 导入：${job.jobDesc}；属【${parentFlow ?? "待确认"}】任务流的编排节点，下辖 ${childCount} 个任务组件。任务参数见 frontmatter。失败处理：待确认。`,
 		"",
-		buildParentMermaid(
-			tree,
-			job,
-			"任务组件",
-			(cid) => tree.byId.get(cid)?.jobDesc ?? cid,
-			(cid) => `${docsFolder}/${executorFor(tree.byId.get(cid)!)}`,
-		),
+		buildParentMermaid(tree, job, "任务组件", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, (cid) => `${docsFolder}/${executorFor(tree.byId.get(cid)!)}`),
 		"",
-		"# 任务参数",
-		"> 该任务下发给执行器的参数（executorParam）。",
-		buildParamTable(job),
-		"",
-		"# 来源信息",
-		sourceInfo(job),
-	];
-	return lines.join("\n");
+	].join("\n");
 }
 
-function componentBody(job: ParsedJob): string {
+function fallbackComponentBody(job: ParsedJob): string {
 	const bean = resolveJobBeanName(job);
-	const lines = [
+	return [
 		GUIDE_NOTE,
 		"",
 		"# 任务说明",
@@ -253,7 +303,7 @@ function componentBody(job: ParsedJob): string {
 		"",
 		"# 涉及的业务范围",
 		"> 需要写明该批量涉及处理的业务范围。不接受“标准化所有产品”这类含糊描述。需要穷举罗列。",
-		bizScope(job),
+		bizScope(job) ?? "待确认",
 		"",
 		"# 批任务防止重复调度机制",
 		"> 注意：光靠丢弃后续调度作为防重调度不可靠。若调度在不同的执行器上，会出现未按照预期丢弃后续调度的场景。需要在批任务业务逻辑中保有防止重复调度的机制。",
@@ -273,42 +323,39 @@ function componentBody(job: ParsedJob): string {
 		"",
 		"# 涉及到分页必须有排序",
 		"> 是否涉及分页？若涉及分页必须有可靠的排序规则，否则可能出现不同页之间数据重复或遗漏。若分页未进行排序可能出现第 1 页和第 2 页其中部分数据重复的情况。",
-		pageSizeNote(job),
+		pageSizeNote(job) ?? "待确认",
 		"",
-		"# 来源信息",
-		sourceInfo(job),
-	];
-	return lines.join("\n");
+	].join("\n");
 }
 
-// ---------- frontmatter（严格按 _fileclasses 字段与顺序） ----------
+// ---------- frontmatter 取值（键名与 _fileclasses 一致） ----------
 
-function taskFlowFm(tree: FlowTree, job: ParsedJob, executor: string): string[] {
-	return [
-		"fileClass: 任务流",
-		`执行器: ${yv(executor)}`,
-		`任务流名称: ${yv(job.jobDesc)}`,
-		`业务执行日期: ${mapEnum(BIZDATE_MAP, job.executeBizDateType) ?? "今天"}`,
-		`Cron表达式: ${yv(job.cron)}`,
-		`负责人: ${yv(job.author ?? "待确认")}`,
-		`调度过期策略: ${mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略"}`,
-		"调度状态: 停止",
-	];
+function taskFlowFm(job: ParsedJob, executor: string): Record<string, string | undefined> {
+	return {
+		fileClass: "任务流",
+		执行器: executor,
+		任务流名称: job.jobDesc,
+		业务执行日期: mapEnum(BIZDATE_MAP, job.executeBizDateType) ?? "今天",
+		Cron表达式: job.cron,
+		负责人: job.author ?? "待确认",
+		调度过期策略: mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略",
+		调度状态: "停止",
+	};
 }
 
-function taskFm(tree: FlowTree, job: ParsedJob, executor: string): string[] {
-	return [
-		"fileClass: 批任务",
-		`执行器: ${yv(executor)}`,
-		`对应任务流名称: ${yv(parentTaskFlowName(tree, job) ?? "待确认")}`,
-		`任务名称: ${yv(job.jobDesc)}`,
-		`负责人: ${yv(job.author ?? "待确认")}`,
-		`任务参数: ${yv(job.executorParam)}`,
-		`调度过期策略: ${mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略"}`,
-	];
+function taskFm(tree: FlowTree, job: ParsedJob, executor: string): Record<string, string | undefined> {
+	return {
+		fileClass: "批任务",
+		执行器: executor,
+		对应任务流名称: parentTaskFlowName(tree, job) ?? "待确认",
+		任务名称: job.jobDesc,
+		负责人: job.author ?? "待确认",
+		任务参数: job.executorParam,
+		调度过期策略: mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略",
+	};
 }
 
-function componentFm(tree: FlowTree, job: ParsedJob, executor: string): { lines: string[]; warnings: string[] } {
+function componentFm(tree: FlowTree, job: ParsedJob, executor: string): { values: Record<string, string | undefined>; warnings: string[] } {
 	const sharding = extractShardingParam(job.paramJson);
 	const warnings: string[] = [];
 	const route = mapEnum(ROUTE_MAP, job.routeStrategy);
@@ -316,17 +363,17 @@ function componentFm(tree: FlowTree, job: ParsedJob, executor: string): { lines:
 	const block = mapEnum(BLOCK_MAP, job.blockStrategy);
 	if (job.blockStrategy && block === job.blockStrategy) warnings.push(`未识别的阻塞处理策略枚举：${job.blockStrategy}（原样写入）`);
 	return {
-		lines: [
-			"fileClass: 任务组件",
-			`执行器: ${yv(executor)}`,
-			`对应批任务名称: ${yv(parentTaskName(tree, job) ?? "待确认")}`,
-			`任务组件名称: ${yv(job.jobDesc)}`,
-			`路由策略: ${route ?? "第一个"}`,
-			`阻塞处理策略: ${block ?? "单机串行"}`,
-			`分片参数: ${yv(sharding ?? "待确认")}`,
-			`jobBeanName: ${yv(resolveJobBeanName(job) ?? "待确认")}`,
-			`调度过期策略: ${mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略"}`,
-		],
+		values: {
+			fileClass: "任务组件",
+			执行器: executor,
+			对应批任务名称: parentTaskName(tree, job) ?? "待确认",
+			任务组件名称: job.jobDesc,
+			阻塞处理策略: block ?? "单机串行",
+			jobBeanName: resolveJobBeanName(job) ?? "待确认",
+			路由策略: route ?? "第一个",
+			分片参数: sharding ?? "待确认",
+			调度过期策略: mapEnum(MISFIRE_MAP, job.misfireStrategy) ?? "忽略",
+		},
 		warnings,
 	};
 }
@@ -338,15 +385,25 @@ export interface ImportPlanResult {
 	warnings: string[];
 }
 
+function normalizeOptions(opts: BuildOptions | string | undefined): Required<BuildOptions> {
+	if (typeof opts === "string") return { docsFolder: opts, templates: {} };
+	return { docsFolder: opts?.docsFolder ?? "8.xxljob", templates: opts?.templates ?? {} };
+}
+
 /**
  * 自底向上三遍法：先任务组件（叶子）→ 批任务（引用组件路径）→ 任务流（引用任务路径）。
  * 同 id 任务跨文件去重后，每个任务生成一份文档。
+ * 文档内容严格套用 _template 的三份 xxljob 模板；模板缺失时回退内置结构。
  */
-export function buildImportPlans(tree: FlowTree, executorFor: (job: ParsedJob) => string, docsFolder = "8.xxljob"): ImportPlanResult {
+export function buildImportPlans(
+	tree: FlowTree,
+	executorFor: (job: ParsedJob) => string,
+	opts: BuildOptions | string = {},
+): ImportPlanResult {
+	const { docsFolder, templates } = normalizeOptions(opts);
 	const warnings = [...tree.warnings];
 	const titleOf = new Map<string, string>(); // id → 文档名（去 .md）
 
-	// 标题：批任务/任务流用 jobDesc；任务组件 jobDesc 为准（与 yrJobName 不一致时 name 记入正文备注已由 body 处理）
 	for (const job of tree.jobs) {
 		titleOf.set(job.id, sanitizeFileName(job.jobDesc || job.yrJobName || job.id));
 	}
@@ -356,19 +413,33 @@ export function buildImportPlans(tree: FlowTree, executorFor: (job: ParsedJob) =
 	const flows = tree.jobs.filter((j) => j.level === "MAIN");
 
 	const plans: FilePlan[] = [];
+	const childLinkBaseOf = (cid: string) => `${docsFolder}/${executorFor(tree.byId.get(cid)!)}`;
 
 	// Pass 1: 任务组件
 	for (const job of components) {
 		const executor = executorFor(job);
 		const title = titleOf.get(job.id)!;
-		const fm = componentFm(tree, job, executor);
-		for (const w of fm.warnings) warnings.push(`任务组件「${job.jobDesc}」${w}`);
+		const { values, warnings: ws } = componentFm(tree, job, executor);
+		for (const w of ws) warnings.push(`任务组件「${job.jobDesc}」${w}`);
+		const summary = `本任务组件来自 xxl-job 导入：${job.jobDesc}${values.jobBeanName ? `；jobBeanName: ${values.jobBeanName}` : "；jobBeanName: 待确认"}。`;
+		const content = renderDoc(
+			templates.component,
+			values,
+			[
+				{ re: /任务简述|任务组件简述/, value: summary },
+				{ re: /业务范围/, value: bizScope(job) },
+				{ re: /分页/, value: pageSizeNote(job) },
+			],
+			buildComponentMermaid(job),
+			() => `${fmBlock(values)}\n\n${fallbackComponentBody(job)}`,
+		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
-			content: `${frontmatter(fm.lines)}\n\n${componentBody(job)}\n`,
+			content,
 			kind: "任务组件",
 			title,
 			jobId: job.id,
+			source: sourceInfo(job),
 		});
 	}
 
@@ -376,13 +447,24 @@ export function buildImportPlans(tree: FlowTree, executorFor: (job: ParsedJob) =
 	for (const job of tasks) {
 		const executor = executorFor(job);
 		const title = titleOf.get(job.id)!;
-		const fm = taskFm(tree, job, executor);
+		const values = taskFm(tree, job, executor);
+		const parentFlow = parentTaskFlowName(tree, job);
+		const childCount = job.childrenIds.filter((c) => tree.byId.has(c)).length;
+		const summary = `本任务来自 xxl-job 导入：${job.jobDesc}；属【${parentFlow ?? "待确认"}】任务流的编排节点，下辖 ${childCount} 个任务组件。任务参数见 frontmatter。失败处理：待确认。`;
+		const content = renderDoc(
+			templates.task,
+			values,
+			[{ re: /任务简述|批任务简述/, value: summary }],
+			buildParentMermaid(tree, job, "任务组件", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, childLinkBaseOf),
+			() => `${fmBlock(values)}\n\n${fallbackTaskBody(tree, job, docsFolder, executorFor)}`,
+		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
-			content: `${frontmatter(fm)}\n\n${taskBody(tree, job, docsFolder, executorFor)}\n`,
+			content,
 			kind: "批任务",
 			title,
 			jobId: job.id,
+			source: sourceInfo(job),
 		});
 	}
 
@@ -390,13 +472,24 @@ export function buildImportPlans(tree: FlowTree, executorFor: (job: ParsedJob) =
 	for (const job of flows) {
 		const executor = executorFor(job);
 		const title = titleOf.get(job.id)!;
-		const fm = taskFlowFm(tree, job, executor);
+		const values = taskFlowFm(job, executor);
+		const cronDesc = job.cron ? `调度 Cron \`${job.cron}\`` : "无调度（被上层编排触发）";
+		const bizDate = mapEnum(BIZDATE_MAP, job.executeBizDateType);
+		const summary = `本任务流来自 xxl-job 导入：${job.jobDesc}；${cronDesc}${bizDate ? `；业务执行日期 ${bizDate}` : ""}。下辖 ${job.childrenIds.filter((c) => tree.byId.has(c)).length} 个任务。失败处理：待确认。`;
+		const content = renderDoc(
+			templates.taskFlow,
+			values,
+			[{ re: /任务流简述|任务简述/, value: summary }],
+			buildParentMermaid(tree, job, "任务", (cid) => tree.byId.get(cid)?.jobDesc ?? cid, childLinkBaseOf),
+			() => `${fmBlock(values)}\n\n${fallbackTaskFlowBody(tree, job, docsFolder, executorFor)}`,
+		);
 		plans.push({
 			path: `${docsFolder}/${executor}/${dirForJob(job)}/${title}.md`,
-			content: `${frontmatter(fm)}\n\n${taskFlowBody(tree, job, docsFolder, executorFor)}\n`,
+			content,
 			kind: "任务流",
 			title,
 			jobId: job.id,
+			source: sourceInfo(job),
 		});
 	}
 

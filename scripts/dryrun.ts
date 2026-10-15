@@ -23,6 +23,22 @@ if (files.length === 0) {
 const outRoot = resolve(outArg);
 const docsFolder = "8.xxljob";
 
+// 模板：默认用仓库内 tests/templates 的副本；--templates=<dir> 可指定目录（如真实 vault 的 _template 目录）
+const tplArg = args.find((a) => a.startsWith("--templates="))?.split("=")[1] ?? "tests/templates";
+const tplDir = resolve(tplArg);
+const readTpl = (name: string): string | undefined => {
+	const p = join(tplDir, name);
+	return existsSync(p) ? readFileSync(p, "utf-8") : undefined;
+};
+const templates = {
+	taskFlow: readTpl("xxljob-任务流-renwuliu.md"),
+	task: readTpl("xxljob-批任务-pirenwu.md"),
+	component: readTpl("xxljob-任务组件-renwuzujian.md"),
+};
+console.log(
+	`模板：任务流 ${templates.taskFlow ? "已加载" : "缺失"} · 批任务 ${templates.task ? "已加载" : "缺失"} · 任务组件 ${templates.component ? "已加载" : "缺失"}（目录 ${tplDir}）`,
+);
+
 const parsed = files.map((f) => ({
 	file: f,
 	name: f.split("/").pop() ?? f,
@@ -39,7 +55,7 @@ const executorByFile = new Map(parsed.map((p) => [p.name, guessExecutorFromFileN
 const executorFor = (job: ParsedJob): string =>
 	sanitizeExecutorDir(executorByFile.get(job.sourceFile.split("/").pop() ?? job.sourceFile) ?? "未命名执行器");
 
-const { plans, warnings } = buildImportPlans(tree, executorFor, docsFolder);
+const { plans, warnings } = buildImportPlans(tree, executorFor, { docsFolder, templates });
 console.log(`\n计划生成 ${plans.length} 份文档，警告 ${warnings.length} 条`);
 for (const w of warnings) console.log(`  警告：${w}`);
 

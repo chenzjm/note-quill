@@ -4,7 +4,21 @@ import { test, skip } from "node:test";
 import assert from "node:assert/strict";
 import { parseXxlXml } from "../src/parser";
 import { buildFlowTree, mapEnum, ROUTE_MAP, resolveJobBeanName, sanitizeFileName } from "../src/mapping";
-import { buildImportPlans } from "../src/writer";
+import { buildImportPlans, type TemplateSources } from "../src/writer";
+import { splitFrontmatter } from "../src/frontmatter";
+
+// 测试脚本统一从仓库根目录执行（npm test）
+const TPL_DIR = join(process.cwd(), "tests/templates");
+const readTpl = (name: string): string | undefined => {
+	const p = join(TPL_DIR, name);
+	return existsSync(p) ? readFileSync(p, "utf-8") : undefined;
+};
+/** 与 vault 的 _template 保持一致的模板副本；缺失时 buildImportPlans 会回退内置结构 */
+const TEMPLATES: TemplateSources = {
+	taskFlow: readTpl("xxljob-任务流-renwuliu.md"),
+	task: readTpl("xxljob-批任务-pirenwu.md"),
+	component: readTpl("xxljob-任务组件-renwuzujian.md"),
+};
 
 const FIXTURE_DIR = process.env.XXL_XML_FIXTURES ?? "/Users/chenzhongjun/Desktop/obsidian材料";
 const FIX_A = join(FIXTURE_DIR, "通用保险执行器(xxl-job-executor-batch-job-demo) (1).xml");
@@ -100,7 +114,7 @@ test("合成样例：n 元树与父子关系", () => {
 
 test("合成样例：三遍法生成 6 份文档", () => {
 	const tree = buildFlowTree([parseXxlXml(synthetic)]);
-	const { plans, warnings } = buildImportPlans(tree, () => "测试执行器");
+	const { plans, warnings } = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
 	assert.equal(plans.length, 6);
 	assert.ok(warnings.length === 0, `unexpected warnings: ${warnings.join("; ")}`);
 	const kinds = Object.groupBy(plans, (p) => p.kind);
@@ -112,7 +126,7 @@ test("合成样例：三遍法生成 6 份文档", () => {
 	assert.ok(flow.path.includes("/任务流/主链路.md"), flow.path);
 	assert.match(flow.content, /fileClass: 任务流/);
 	assert.match(flow.content, /调度状态: 停止/);
-	assert.match(flow.content, /Cron表达式: "0 0 2 \* \* \?"/);
+	assert.match(flow.content, /Cron表达式: 0 0 2 \* \* \?/);
 	// mermaid 双链指向任务目录
 	assert.match(flow.content, /\[\[8\.xxljob\/测试执行器\/任务\/任务A\|任务A\]\]/);
 	assert.match(flow.content, /1 --> 2/); // n1→n2 边
@@ -120,22 +134,114 @@ test("合成样例：三遍法生成 6 份文档", () => {
 
 	const taskA = plans.find((p) => p.title === "任务A")!;
 	assert.match(taskA.content, /fileClass: 批任务/);
-	assert.match(taskA.content, /对应任务流名称: "主链路"/);
+	assert.match(taskA.content, /对应任务流名称: 主链路/);
 	assert.match(taskA.content, /\[\[8\.xxljob\/测试执行器\/任务组件\/组件A1\|组件A1\]\]/);
 	assert.match(taskA.content, /任务参数: "\{\\"pageSize\\":500/); // 参数反转义保留
 
 	const compA1 = plans.find((p) => p.title === "组件A1")!;
 	assert.match(compA1.content, /fileClass: 任务组件/);
-	assert.match(compA1.content, /对应批任务名称: "任务A"/);
+	assert.match(compA1.content, /对应批任务名称: 任务A/);
 	assert.match(compA1.content, /路由策略: 一致性hash/);
 	assert.match(compA1.content, /阻塞处理策略: 丢弃后续调度/);
-	assert.match(compA1.content, /jobBeanName: "beanA1Job"/);
-	assert.match(compA1.content, /分片参数: "待确认"/);
-	assert.match(compA1.content, /排序规则：待确认/);
-	assert.match(compA1.content, /# 来源信息/);
+	assert.match(compA1.content, /jobBeanName: beanA1Job/);
+	assert.match(compA1.content, /分片参数: 待确认/);
+	assert.match(compA1.content, /涉及分页，pageSize=500/);
+	// 来源信息不再写进正文，改由 plan 携带（供状态文件记录）
+	assert.doesNotMatch(compA1.content, /# 来源信息/);
+	assert.equal(compA1.source.jobId, "100");
 
 	// 组件 A1 的 mermaid 使用画布 processClass
 	assert.match(compA1.content, /B\[beanA1Job\]/);
+});
+
+/** 取文档正文（去掉 frontmatter） */
+function bodyOf(content: string): string {
+	return splitFrontmatter(content)?.body ?? content;
+}
+
+/** 取 frontmatter 原文 */
+function fmOf(content: string): string {
+	return splitFrontmatter(content)?.fm ?? "";
+}
+
+test("模板驱动：章节与模板完全一致", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
+	const headingsOf = (content: string): string[] =>
+		bodyOf(content)
+			.split("\n")
+			.filter((l) => /^#\s/.test(l))
+			.map((l) => l.trim());
+
+	// 任务流：模板只有「# 任务说明」
+	const flow = plans.find((p) => p.kind === "任务流")!;
+	assert.deepEqual(headingsOf(flow.content), ["# 任务说明"], flow.content);
+	const flowTplHeadings = headingsOf(TEMPLATES.taskFlow ?? "");
+	assert.deepEqual(headingsOf(flow.content), flowTplHeadings);
+
+	// 批任务：模板只有「# 任务说明」，任务参数只在 frontmatter
+	const taskA = plans.find((p) => p.title === "任务A")!;
+	assert.deepEqual(headingsOf(taskA.content), ["# 任务说明"], taskA.content);
+	assert.match(taskA.content, /^任务参数: /m); // frontmatter 里有
+	assert.doesNotMatch(taskA.content, /# 任务参数/);
+
+	// 任务组件：六个章节与模板一致，顺序一致
+	const compA1 = plans.find((p) => p.title === "组件A1")!;
+	const tplHeadings = headingsOf(TEMPLATES.component ?? "");
+	assert.deepEqual(headingsOf(compA1.content), tplHeadings, compA1.content);
+	assert.ok(tplHeadings.includes("# 批任务防止重复调度机制"));
+
+	// 三类文档都不再写来源信息
+	for (const p of plans) assert.doesNotMatch(p.content, /# 来源信息/, p.path);
+});
+
+test("模板驱动：frontmatter 键顺序沿用模板", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
+	const keysOf = (content: string): string[] =>
+		fmOf(content)
+			.split("\n")
+			.map((l) => l.match(/^([^:]+):/)?.[1]?.trim())
+			.filter((k): k is string => !!k);
+	for (const [kind, tpl] of [
+		["任务流", TEMPLATES.taskFlow],
+		["批任务", TEMPLATES.task],
+		["任务组件", TEMPLATES.component],
+	] as const) {
+		const plan = plans.find((p) => p.kind === kind)!;
+		const tplKeys = keysOf(tpl ?? "");
+		assert.deepEqual(keysOf(plan.content), tplKeys, `${kind} 键顺序应与模板一致`);
+	}
+});
+
+test("模板驱动：无法推断的人工项保留填写提示，示例 mermaid 被替换", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: TEMPLATES });
+	const compA1 = plans.find((p) => p.title === "组件A1")!;
+	// 无法从参数推断的业务范围：保留模板提示由人工填写
+	assert.match(compA1.content, /\{\{：业务范围说明\}\}/);
+	// 不能推断的：防重机制 / 外部接口 / 交易状态 保留模板提示
+	assert.match(compA1.content, /\{\{：防重机制说明\}\}/);
+	assert.match(compA1.content, /\{\{：说明如何防止重复调用外部接口\}\}/);
+	assert.match(compA1.content, /\{\{：具体说明交易状态判断逻辑，避免交易状态错误判断\}\}/);
+	assert.match(compA1.content, /\{\{：调用外部接口情况说明，需要罗列完整调用外部的接口\}\}/);
+	// 模板里的示例图（华能信托批扣 / 有权限?）必须被替换掉
+	assert.doesNotMatch(compA1.content, /华能信托批扣/);
+	assert.doesNotMatch(compA1.content, /有权限\?/);
+	assert.match(compA1.content, /B\[beanA1Job\]/);
+	// 契约提示行来自模板
+	assert.match(compA1.content, /本页维护当前契约/);
+});
+
+test("无模板时回退内置结构", () => {
+	const tree = buildFlowTree([parseXxlXml(synthetic)]);
+	const { plans } = buildImportPlans(tree, () => "测试执行器", { templates: {} });
+	assert.equal(plans.length, 6);
+	const taskA = plans.find((p) => p.title === "任务A")!;
+	assert.match(taskA.content, /fileClass: 批任务/);
+	assert.doesNotMatch(taskA.content, /# 来源信息/);
+	assert.doesNotMatch(taskA.content, /# 任务参数/); // 回退结构也不再写任务参数表格
+	assert.match(taskA.content, /# 任务说明/);
 });
 
 test("合成样例：雪花 ID 精度保持（字符串处理）", () => {
@@ -167,13 +273,13 @@ test("真实样例A：担保函链路（无 MAIN，顶层 VIRTUAL → 2 组件�
 	assert.equal(tree.roots[0].level, "VIRTUAL");
 	const gen = r.jobs.find((j) => j.jobDesc === "担保函生成任务组件")!;
 	assert.equal(gen.processClass, "letterOfGuaranteeGenerateJob");
-	const { plans } = buildImportPlans(tree, () => "通用保险执行器");
+	const { plans } = buildImportPlans(tree, () => "通用保险执行器", { templates: TEMPLATES });
 	assert.equal(plans.length, 3);
 	const up = plans.find((p) => p.title === "担保函上传任务组件")!;
-	assert.match(up.content, /jobBeanName: "letterOfGuaranteeUploadJob"/);
+	assert.match(up.content, /jobBeanName: letterOfGuaranteeUploadJob/);
 	// 顶层 VIRTUAL 的对应任务流名称为待确认
 	const task = plans.find((p) => p.kind === "批任务")!;
-	assert.match(task.content, /对应任务流名称: "待确认"/);
+	assert.match(task.content, /对应任务流名称: 待确认/);
 });
 
 test("真实样例B：账务文件链路（MAIN → 3 任务 → 3 组件）", { skip: !hasB && "fixture 不存在" }, () => {
@@ -185,7 +291,7 @@ test("真实样例B：账务文件链路（MAIN → 3 任务 → 3 组件）", {
 	assert.equal(main.alarmMobile, "17887285283");
 	const tree = buildFlowTree([r]);
 	assert.equal(tree.roots.length, 1);
-	const { plans, warnings } = buildImportPlans(tree, () => "通用保险执行器");
+	const { plans, warnings } = buildImportPlans(tree, () => "通用保险执行器", { templates: TEMPLATES });
 	assert.equal(plans.length, 7);
 	// MAIN 的 mermaid 引用三个任务
 	const flow = plans.find((p) => p.kind === "任务流")!;
@@ -193,14 +299,14 @@ test("真实样例B：账务文件链路（MAIN → 3 任务 → 3 组件）", {
 	assert.match(flow.content, /任务\/【蚂蚁星河-广州盛大】账务文件-文件上传/);
 	// 批任务回链任务流
 	const task = plans.find((p) => p.title === "【蚂蚁星河-广州盛大】账务文件-数据加工")!;
-	assert.match(task.content, /对应任务流名称: "【蚂蚁星河-广州盛大】账务文件-加工生成及上传"/);
+	assert.match(task.content, /对应任务流名称: 【蚂蚁星河-广州盛大】账务文件-加工生成及上传/);
 	// jobBeanName 是任务组件级字段：在数据加工组件文档上断言
 	const dataComp = plans.find((p) => p.title === "【账务文件配置】数据加工")!;
-	assert.match(dataComp.content, /对应批任务名称: "【蚂蚁星河-广州盛大】账务文件-数据加工"/);
-	assert.match(dataComp.content, /jobBeanName: "assetfileProcessJob"/);
+	assert.match(dataComp.content, /对应批任务名称: 【蚂蚁星河-广州盛大】账务文件-数据加工/);
+	assert.match(dataComp.content, /jobBeanName: assetfileProcessJob/);
 	// 组件回链批任务
 	const comps = plans.filter((p) => p.kind === "任务组件");
-	assert.ok(comps.every((c) => /对应批任务名称: "【蚂蚁星河/.test(c.content)), comps.map((c) => c.title).join(","));
+	assert.ok(comps.every((c) => /对应批任务名称: 【蚂蚁星河/.test(c.content)), comps.map((c) => c.title).join(","));
 	// 未识别枚举警告为 0（样例枚举均在映射表内）
 	assert.equal(warnings.filter((w) => w.includes("未识别")).length, 0, warnings.join("; "));
 });
@@ -210,7 +316,7 @@ test("真实样例：A+B 合并导入（跨文件去重）", { skip: !hasA || !h
 	const rb = parseXxlXml(readFileSync(FIX_B, "utf-8"), FIX_B);
 	const tree = buildFlowTree([ra, rb]);
 	assert.equal(tree.jobs.length, 10); // 3 + 7
-	const { plans } = buildImportPlans(tree, () => "通用保险执行器");
+	const { plans } = buildImportPlans(tree, () => "通用保险执行器", { templates: TEMPLATES });
 	assert.equal(plans.length, 10);
 	// 两条独立链路，roots 应为 2（B 的 MAIN + A 的顶层 VIRTUAL）
 	assert.equal(tree.roots.length, 2);

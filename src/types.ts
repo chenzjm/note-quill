@@ -58,10 +58,21 @@ export interface ParseResult {
 
 export type DocKind = "任务流" | "批任务" | "任务组件";
 
+/** 导入来源信息：不再写进文档正文，交给状态文件记录 */
+export interface SourceInfo {
+	jobId: string;
+	sourceFile: string;
+	author?: string;
+	addTime?: string;
+	updateTime?: string;
+	alarmMobile?: string;
+}
+
 export interface FilePlan {
 	path: string; // 相对 vault 根，如 8.xxljob/<执行器>/任务/xxx.md
 	content: string;
 	kind: DocKind;
 	title: string; // 文档名（文件名去 .md）
 	jobId: string;
+	source: SourceInfo;
 }

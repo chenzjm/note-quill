@@ -1,7 +1,7 @@
 import { App, Modal, Notice, Setting, TFile } from "obsidian";
 import { parseXxlXml } from "../parser";
 import { buildFlowTree, levelToDocKind, type FlowTree } from "../mapping";
-import { buildImportPlans } from "../writer";
+import { buildImportPlans, type TemplateSources } from "../writer";
 import type { ParseResult, ParsedJob } from "../types";
 import { applyPlans, type ImportOutcome } from "../importer";
 import {
@@ -25,6 +25,7 @@ export class XxlImportModal extends Modal {
 	private readonly policy: () => "skip" | "update" | "rename";
 	private readonly getExecutors: () => ExecutorEntry[];
 	private readonly onExecutorsChanged: (next: ExecutorEntry[]) => Promise<void>;
+	private readonly templates: TemplateSources;
 
 	private files: PickedFile[] = [];
 	private executorByFile = new Map<string, string>();
@@ -39,6 +40,7 @@ export class XxlImportModal extends Modal {
 			policy: () => "skip" | "update" | "rename";
 			getExecutors: () => ExecutorEntry[];
 			onExecutorsChanged: (next: ExecutorEntry[]) => Promise<void>;
+			templates: TemplateSources;
 		},
 	) {
 		super(app);
@@ -46,6 +48,7 @@ export class XxlImportModal extends Modal {
 		this.policy = opts.policy;
 		this.getExecutors = opts.getExecutors;
 		this.onExecutorsChanged = opts.onExecutorsChanged;
+		this.templates = opts.templates;
 	}
 
 	onOpen(): void {
@@ -228,7 +231,10 @@ export class XxlImportModal extends Modal {
 		const tree = this.buildTree();
 		const executorFor = (job: ParsedJob): string =>
 			sanitizeExecutorDir(this.executorByFile.get(job.sourceFile) ?? guessExecutorFromFileName(job.sourceFile));
-		const { plans, warnings } = buildImportPlans(tree, executorFor, this.docsFolder);
+		const { plans, warnings } = buildImportPlans(tree, executorFor, {
+			docsFolder: this.docsFolder,
+			templates: this.templates,
+		});
 		this.lastPlans = { plans, warnings };
 
 		const counts = { 任务流: 0, 批任务: 0, 任务组件: 0 } as Record<string, number>;
@@ -277,7 +283,10 @@ export class XxlImportModal extends Modal {
 		const tree = this.buildTree();
 		const executorFor = (job: ParsedJob): string =>
 			sanitizeExecutorDir(this.executorByFile.get(job.sourceFile) ?? guessExecutorFromFileName(job.sourceFile));
-		const { plans } = buildImportPlans(tree, executorFor, this.docsFolder);
+		const { plans } = buildImportPlans(tree, executorFor, {
+			docsFolder: this.docsFolder,
+			templates: this.templates,
+		});
 		this.outcome = await applyPlans(this.app, plans, this.policy());
 
 		// 回写执行器清单（按 jobGroup 绑定）

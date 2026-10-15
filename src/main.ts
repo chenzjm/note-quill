@@ -1,6 +1,7 @@
 import { Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, FlowAtlasSettingTab, type FlowAtlasSettings } from "./settings";
 import { XxlImportModal } from "./ui/importModal";
+import { readTemplates } from "./templates";
 
 export default class FlowAtlasPlugin extends Plugin {
 	settings: FlowAtlasSettings = DEFAULT_SETTINGS;
@@ -8,7 +9,12 @@ export default class FlowAtlasPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		const openWizard = () => {
+		const openWizard = async (): Promise<void> => {
+			const { templates } = await readTemplates(this.app, {
+				flowTemplate: this.settings.flowTemplate,
+				taskTemplate: this.settings.taskTemplate,
+				componentTemplate: this.settings.componentTemplate,
+			});
 			new XxlImportModal(this.app, {
 				docsFolder: this.settings.docsFolder,
 				policy: () => this.settings.conflictPolicy,
@@ -17,6 +23,7 @@ export default class FlowAtlasPlugin extends Plugin {
 					this.settings.executors = next;
 					await this.saveSettings();
 				},
+				templates,
 			}).open();
 		};
 
@@ -24,11 +31,11 @@ export default class FlowAtlasPlugin extends Plugin {
 		this.addCommand({
 			id: "import-xml",
 			name: "导入 xxl-job 任务 XML",
-			callback: () => openWizard(),
+			callback: () => void openWizard(),
 		});
 
 		// Ribbon icon
-		this.addRibbonIcon("upload-cloud", "导入 xxl-job 任务 XML", () => openWizard());
+		this.addRibbonIcon("upload-cloud", "导入 xxl-job 任务 XML", () => void openWizard());
 
 		// Settings tab
 		this.addSettingTab(new FlowAtlasSettingTab(this.app, this));
